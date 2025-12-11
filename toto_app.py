@@ -7,50 +7,67 @@ from datetime import datetime, timedelta
 from io import StringIO
 from openai import OpenAI
 
-# ==========================================
-# 🔑 [필수] API 키 설정 (앱에서 바로 수정 가능하도록 설정)
-# ==========================================
-# 여기에 미리 적어두셔도 되고, 실행 후 웹화면에서 입력해도 됩니다.
-DEFAULT_DEEPSEEK_KEY = "sk-77093904b26643038a270043ea59cc3b"
-DEFAULT_ODDS_KEYS = [
-    "e5e2ea14754efa0034022ed74db1d57d",
-    "9eeb85750b20d56d69544205710d6126",
-    "5741cff533daa57d8dd5ab91e1ec4fe8"
-]
-# ==========================================
-
-# 페이지 기본 설정 (제목, 아이콘)
+# 페이지 설정
 st.set_page_config(page_title="토토고 AI 대시보드", page_icon="🏀", layout="wide")
 
-# --- 사이드바: 설정 메뉴 ---
+# ==========================================
+# 🔒 보안: 비밀번호 체크 (가장 먼저 실행)
+# ==========================================
+def check_password():
+    """비밀번호가 맞는지 확인하는 함수"""
+    if "password_correct" not in st.session_state:
+        st.session_state.password_correct = False
+
+    if st.session_state.password_correct:
+        return True  # 이미 로그인 성공함
+
+    # 비밀번호 입력창
+    st.title("🔒 토토고 접근 제한")
+    password = st.text_input("비밀번호를 입력하세요", type="password")
+    
+    if st.button("로그인"):
+        # 금고(Secrets)에 저장된 비밀번호와 비교
+        if password == st.secrets["app_password"]:
+            st.session_state.password_correct = True
+            st.rerun() # 화면 새로고침
+        else:
+            st.error("❌ 비밀번호가 틀렸습니다.")
+    return False
+
+if not check_password():
+    st.stop() # 비밀번호 틀리면 여기서 멈춤 (아래 코드 실행 안 됨)
+
+# ==========================================
+# 🔑 API 키 불러오기 (금고에서 꺼내기)
+# ==========================================
+try:
+    DEEPSEEK_API_KEY = st.secrets["deepseek_api_key"]
+    ODDS_API_KEYS = st.secrets["odds_api_keys"]
+except Exception as e:
+    st.error("❌ Secrets 설정이 안 되어 있습니다. Streamlit 설정 메뉴에서 API 키를 넣어주세요.")
+    st.stop()
+
+# --- 사이드바 설정 ---
 st.sidebar.title("⚙️ 설정 (Settings)")
-
-# API 키 입력받기 (코드에 적은거 있으면 그거 쓰고, 아니면 입력창 뜸)
-deepseek_key = st.sidebar.text_input("DeepSeek API Key", value=DEFAULT_DEEPSEEK_KEY, type="password")
-odds_keys_input = st.sidebar.text_area("Odds API Keys (한 줄에 하나씩)", value="\n".join(DEFAULT_ODDS_KEYS))
-odds_keys = [k.strip() for k in odds_keys_input.split('\n') if k.strip()]
-
+st.sidebar.success("✅ 로그인 완료")
 st.sidebar.markdown("---")
-min_bet_odds = st.sidebar.slider("최소 배당 (Min Odds)", 1.1, 3.0, 1.7)
-confidence_limit = st.sidebar.slider("AI 확신도 (Confidence)", 0.5, 0.9, 0.60)
+min_bet_odds = st.sidebar.slider("최소 배당", 1.1, 3.0, 1.7)
+confidence_limit = st.sidebar.slider("AI 확신도", 0.5, 0.9, 0.60)
 st.sidebar.markdown("---")
-st.sidebar.info("버튼을 누르면 분석을 시작합니다.")
 
 # --- 메인 화면 ---
 st.title("🏀 토토고(TotoGo) AI 승부사")
-st.markdown("### 내 손안의 AI 스포츠 베팅 에이전트")
 
-# 함수 정의 (캐싱을 써서 속도 최적화)
+# 함수 정의 (캐싱 최적화)
 @st.cache_resource
 def load_model():
     try:
         model = XGBClassifier()
         model.load_model("totogo_model.json")
         return model
-    except:
-        return None
+    except: return None
 
-@st.cache_data(ttl=3600) # 1시간마다 갱신
+@st.cache_data(ttl=3600)
 def get_injury_data():
     url = "https://www.cbssports.com/nba/injuries/"
     header = {"User-Agent": "Mozilla/5.0"}
@@ -70,8 +87,6 @@ def get_injury_data():
     except: return {}
 
 def ask_deepseek(client, match_info, prediction):
-    if not client: return "API 키가 없어서 브리핑을 생략합니다."
-    
     prompt = f"""
     당신은 스포츠 분석가 '토토고'입니다.
     [경기] {match_info['home']} vs {match_info['away']}
@@ -96,13 +111,11 @@ if st.button("🚀 분석 시작 (Analyze Now)", type="primary"):
     # 1. 모델 로드
     model = load_model()
     if not model:
-        st.error("❌ 'totogo_model.json' 파일이 없습니다. 학습(toto_train.py)을 먼저 해주세요!")
+        st.error("❌ 'totogo_model.json' 파일이 없습니다.")
         st.stop()
         
-    # 2. 딥시크 클라이언트 연결
-    client = None
-    if deepseek_key and "여기에" not in deepseek_key:
-        client = OpenAI(api_key=deepseek_key, base_url="https://api.deepseek.com")
+    # 2. 딥시크 연결
+    client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
         
     # 3. 데이터 수집
     injury_db = get_injury_data()
@@ -111,8 +124,8 @@ if st.button("🚀 분석 시작 (Analyze Now)", type="primary"):
         games_data = None
         used_key = ""
         
-        for key in odds_keys:
-            if "여기에" in key: continue
+        # 금고에서 꺼낸 키 3개를 돌려가며 사용
+        for key in ODDS_API_KEYS:
             url = f'https://api.the-odds-api.com/v4/sports/basketball_nba/odds/?apiKey={key}&regions=eu&markets=h2h,spreads,totals&oddsFormat=decimal'
             try:
                 r = requests.get(url)
@@ -127,14 +140,13 @@ if st.button("🚀 분석 시작 (Analyze Now)", type="primary"):
             st.stop()
             
     # 4. 분석 및 화면 표시
-    st.success(f"✅ 데이터 수신 완료! (사용된 키: {used_key})")
+    st.success(f"✅ 데이터 수신 완료! (보안 연결됨)")
     
     sorted_games = sorted(games_data, key=lambda x: x['commence_time'])
-    limit_date = datetime.utcnow() + timedelta(hours=9, days=1) # 내일까지
+    limit_date = datetime.utcnow() + timedelta(hours=9, days=1)
     
     count = 0
     for game in sorted_games:
-        # 날짜 필터
         utc_time_str = game['commence_time'].replace('Z', '')
         kst_time = datetime.fromisoformat(utc_time_str) + timedelta(hours=9)
         if kst_time.date() > limit_date.date(): continue
@@ -143,7 +155,7 @@ if st.button("🚀 분석 시작 (Analyze Now)", type="primary"):
         home = game['home_team']
         away = game['away_team']
         
-        # 데이터 추출 (간략화)
+        # 데이터 추출
         odds_h, odds_a = 0, 0
         handicap_pt_h, handicap_odds_h = 0, 0
         total_pt = 0
@@ -158,7 +170,7 @@ if st.button("🚀 분석 시작 (Analyze Now)", type="primary"):
                 odds_h = next(o['price'] for o in h2h['outcomes'] if o['name'] == home)
                 odds_a = next(o['price'] for o in h2h['outcomes'] if o['name'] == away)
             
-            # Spread (Home)
+            # Spread
             spread = next((m for b in bookmakers for m in b['markets'] if m['key'] == 'spreads'), None)
             if spread:
                 s_out = next((o for o in spread['outcomes'] if o['name'] == home), None)
@@ -191,42 +203,30 @@ if st.button("🚀 분석 시작 (Analyze Now)", type="primary"):
             recommendation = f"🌊 원정팀({away}) 승리 추천"
             color = "blue"
             
-        # --- UI 카드 그리기 ---
+        # 카드 UI
         with st.container():
             st.markdown(f"### ⏰ {kst_time.strftime('%m/%d %H:%M')} | {home} vs {away}")
-            
             col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("홈팀 배당", odds_h, f"핸디 {handicap_pt_h}")
-            with col2:
-                st.metric("원정팀 배당", odds_a, "VS")
-            with col3:
-                st.metric("언오버 기준", total_pt)
+            with col1: st.metric("홈팀 배당", odds_h, f"핸디 {handicap_pt_h}")
+            with col2: st.metric("원정팀 배당", odds_a, "VS")
+            with col3: st.metric("언오버 기준", total_pt)
             
-            # AI 결과 바
             st.write(f"**🤖 AI 승률 예측 (홈팀 기준): {win_prob:.1f}%**")
             st.progress(int(win_prob))
             
-            # 추천 박스
-            if color == "green":
-                st.success(f"**{recommendation}** (배당 {odds_h})")
-            elif color == "blue":
-                st.info(f"**{recommendation}** (배당 {odds_a})")
-            else:
-                st.warning(f"**{recommendation}** - 메리트가 부족합니다.")
+            if color == "green": st.success(f"**{recommendation}** (배당 {odds_h})")
+            elif color == "blue": st.info(f"**{recommendation}** (배당 {odds_a})")
+            else: st.warning(f"**{recommendation}** - 메리트가 부족합니다.")
                 
-            # 딥시크 브리핑 (추천 경기에만 열어보기)
             if color != "grey":
-                with st.expander("💬 딥시크(DeepSeek) 상세 브리핑 보기"):
-                    with st.spinner("리포트 작성 중..."):
+                with st.expander("💬 딥시크 브리핑 보기"):
+                    with st.spinner("작성 중..."):
                         briefing = ask_deepseek(client, {
                             'home': home, 'away': away, 'odds_h': odds_h, 'odds_a': odds_a,
                             'handicap_pt_h': handicap_pt_h, 'handicap_odds_h': handicap_odds_h,
                             'total_pt': total_pt, 'win_prob': round(win_prob, 1)
                         }, recommendation)
                         st.write(briefing)
-            
             st.markdown("---")
 
-    if count == 0:
-        st.warning("📅 오늘/내일 예정된 경기가 없습니다.")
+    if count == 0: st.warning("📅 오늘/내일 예정된 경기가 없습니다.")
